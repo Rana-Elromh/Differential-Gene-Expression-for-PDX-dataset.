@@ -1,0 +1,389 @@
+---
+title: "Differential Gene Expression for PDX dataset"
+output: html_document
+---
+#Load the packages.
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("DESeq2")
+BiocManager::install("EnhancedVolcano")
+
+if(!require(pheatmap)) install.packages("pheatmap")
+if(!require(RColorBrewer)) install.packages("RColorBrewer")
+
+if(!require(clusterProfiler)) BiocManager::install("clusterProfiler")
+if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+if(!require(org.Mm.eg.db)) BiocManager::install("org.Mm.eg.db")
+if(!require(msigdbr)) install.packages("msigdbr")
+if(!require(fgsea)) BiocManager::install("fgsea")
+
+library(org.Mm.eg.db)
+library("DESeq2")
+library("EnhancedVolcano")
+library(pheatmap)
+library(RColorBrewer)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(fgsea)
+library(msigdbr)
+library(ggplot2)
+```
+
+#Load the dataset.
+```{r}
+PDXdataset = read.table('https://drive.google.com/uc?export=download&id=1tb_qnLwjeAf0B5gWmi7_6SGOqy44dU8x', header = TRUE,row.names = 1, sep='\t') 
+head(PDXdataset)
+```
+
+#Define data and remove id column
+
+```{r}
+data <- (PDXdataset) 
+colnames(PDXdataset) -> names 
+meta_classes<- c('ER','ER','ER','ER', 'ER', 'ER', 'ER', 'TN','TN','TN','TN','TN', 'TN', 'TN') 
+meta_data <- data.frame(names, meta_classes)
+```
+
+#Perform first step of DESeq (Define DESeq dataset)
+```{r}
+ds <- DESeqDataSetFromMatrix(countData=data, colData=meta_data, design=~meta_classes) 
+
+```
+
+#Perform DEseq and create results object
+```{r}
+Ds <- DESeq(ds) 
+res <- results(Ds) 
+print(res) 
+```
+
+# Output results in.txt format
+
+```{r}
+write.csv(res,"DESeq2_PDX_R.csv", row.names=TRUE,col.names=NA, sep="\t", quote=TRUE, append=TRUE) 
+
+```
+
+#Create MA plot and Create enhance volcano plot with identified differentially expressed genes
+```{r}
+plotMA(res) 
+EnhancedVolcano(res, x = 'log2FoldChange', y = 'pvalue', lab = rownames(res), xlim = c(-5, 8)) 
+```
+## View first few genes and # Sort genes by significance (lowest p-value first)
+```{r}
+head(res)
+res_ordered <- res[order(res$pvalue), ]
+head(res_ordered)
+```
+
+#Filter significant genes: adjusted p-value < 0.05, log2 fold change > 1 or < -1
+```{r}
+sig_genes <- subset(res, padj < 0.05 & abs(log2FoldChange) > 1)
+head(sig_genes)
+```
+#Save only significant genes
+```{r}
+write.csv(sig_genes, "DESeq2_PDX_significant_genes.csv",sep = "\t", quote = FALSE, row.names = TRUE)
+```
+#Draw a better volcano plot andCheck number of significant genes
+```{r}
+volcano_plot <- EnhancedVolcano(res,
+    lab = rownames(res),
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    pCutoff = 0.05,
+    FCcutoff = 1,
+    title = 'PDX ER vs TN',
+    subtitle = 'Differentially Expressed Genes')
+
+print(volcano_plot)
+ggsave("Volcano_plot.png", volcano_plot, width = 10, height = 6, dpi = 300)
+shell.exec("Volcano_plot.png")
+```
+#Save a normalized counts table
+```{r}
+normalized_counts <- counts(Ds, normalized = TRUE)
+write.csv(normalized_counts, "PDX_normalized_counts.csv",
+            sep = "\t", quote = FALSE)
+```
+#Create a heatmap of significant genes
+```{r}
+# Make sure sig_genes exists
+sig_genes <- subset(res, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 1)
+
+# Get normalized counts from DESeq2
+normalized_counts <- counts(Ds, normalized = TRUE)
+
+# Subset only significant genes
+sig_counts <- normalized_counts[rownames(sig_genes), ]
+
+#Scale the data: Scaling helps to see differences across samples clearly:
+# Scale by row (genes)
+sig_counts_scaled <- t(scale(t(sig_counts)))
+```
+#Check your sample names
+```{r}
+# these are your sample names
+colnames(sig_counts)  
+meta_classes
+# this should match length and order of columns
+length(colnames(sig_counts))
+length(meta_classes)
+```
+
+#Create the heatmap
+```{r}
+#Make sure sig_counts_scaled exists
+sig_counts_scaled <- t(scale(t(sig_counts)))  # scale rows
+sig_genes <- subset(res, !is.na(padj) & padj < 0.05 & abs(log2FoldChange) > 1)
+
+# Create annotation for samples
+sig_counts <- normalized_counts[rownames(sig_genes), ]
+annotation_col <- data.frame(Group = factor(meta_classes))
+rownames(annotation_col) <- colnames(sig_counts)
+
+##Create the heatmap color palette before plotting
+heatmap_colors <- colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100)
+heatmap_colors[1:5]  # should show first 5 colors
+
+#Creat the heatmap and save as a high-resolution PNG
+png("PDX_heatmap_publication.png", width = 1200, height = 1600, res = 300)
+pheatmap(sig_counts_scaled,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         show_rownames = FALSE,
+         show_colnames = TRUE,
+         annotation_col = annotation_col,
+         color = heatmap_colors,
+         border_color = NA,
+         fontsize = 10,
+         main = "Differentially Expressed Genes in PDX (ER vs TN)")
+dev.off()
+```
+
+#PCA plot
+
+```{r}
+
+# Check what objects we have
+print("Objects in environment:")
+ls()
+
+# Check the DESeq results
+print("DESeq results summary:")
+summary(res)
+
+# Check significant genes
+sig_genes <- subset(res, padj < 0.05 & abs(log2FoldChange) > 1)
+print(paste("Number of significant genes:", nrow(sig_genes)))
+
+rld <- rlog(Ds, blind = FALSE)
+pca_data <- plotPCA(rld, intgroup = "meta_classes", returnData = TRUE)
+percent_var <- round(100 * attr(pca_data, "percentVar"))
+
+pca_plot <- ggplot(pca_data, aes(PC1, PC2, color = group)) +
+  geom_point(size = 3, alpha = 0.8) +
+  scale_color_manual(values = c("ER" = "#2E86AB", "TN" = "#A23B72")) +
+  xlab(paste0("PC1: ", percent_var[1], "% variance")) +
+  ylab(paste0("PC2: ", percent_var[2], "% variance")) +
+  ggtitle("Principal Component Analysis") +
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    legend.position = "right",
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.2)
+  )
+
+print(best_pca)
+ggsave("PCA_plot.png", best_pca, width = 6, height = 5, dpi = 300)
+shell.exec("PCA_plot.png")
+```
+
+#GO analysis
+
+```{r}
+if (exists("sig_genes") && nrow(sig_genes) > 0) {
+  print("Running GO analysis...")
+  
+  # Get gene symbols
+  gene_symbols <- rownames(sig_genes)
+  print(paste("First few genes:", paste(head(gene_symbols), collapse = ", ")))
+  
+  # Convert to Entrez IDs
+  tryCatch({
+    entrez_ids <- mapIds(org.Mm.eg.db,
+                        keys = gene_symbols,
+                        column = "ENTREZID", 
+                        keytype = "SYMBOL",
+                        multiVals = "first")
+    
+    entrez_ids <- na.omit(entrez_ids)
+    print(paste("Converted", length(entrez_ids), "genes to Entrez IDs"))
+    
+    if (length(entrez_ids) > 0) {
+      # Simple GO analysis
+      go_results <- enrichGO(gene = entrez_ids,
+                            OrgDb = org.Mm.eg.db,
+                            ont = "BP",
+                            pvalueCutoff = 0.05,
+                            readable = TRUE)
+      
+      if (nrow(go_results) > 0) {
+        print("Top GO terms:")
+        print(head(go_results, 5))
+      } else {
+        print("No significant GO terms found")
+      }
+    }
+  }, error = function(e) {
+    print(paste("GO analysis error:", e$message))
+  })
+  
+} else {
+  print("No significant genes for GO analysis")
+}
+
+# View GO results as a table
+if (exists("go_results") && nrow(go_results) > 0) {
+  View(go_results)
+  print(head(go_results, 10))
+}
+
+# Create a dot plot
+if (exists("go_results") && nrow(go_results) > 0) {
+  dotplot(go_results, showCategory=15)
+}
+
+# Save to file and open
+if (exists("go_results") && nrow(go_results) > 0) {
+  write.csv(go_results, "GO_results.csv")
+  shell.exec("GO_results.csv")
+}
+
+# If file doesn't exist, run the complete GO analysis and plotting code
+if (exists("go_results") && nrow(go_results) > 0) {
+  top_go <- head(go_results, 15)
+  go_plot <- ggplot(top_go, aes(x = GeneRatio, y = reorder(Description, GeneRatio))) +
+    geom_point(aes(size = Count, color = p.adjust)) +
+    scale_color_gradient(low = "red", high = "blue", name = "Adj. p-value") +
+    scale_size_continuous(name = "Gene count") +
+    labs(x = "Gene Ratio", y = "", title = "GO Biological Process Enrichment") +
+    theme_bw()
+  
+  print(go_plot)
+  ggsave("GO_dotplot.png", go_plot, width = 10, height = 6, dpi = 300)
+  shell.exec("GO_dotplot.png")
+}
+if (exists("go_plot")) {
+  ggsave("GO_plot.png", go_plot, width = 10, height = 6, dpi = 300)
+  shell.exec("GO_plot.png")
+}
+
+```
+
+#GSEA analysis
+```{r}
+# Prepare gene list
+tryCatch({
+  # Clean and sort results
+  res_clean <- res[!is.na(res$log2FoldChange) & !is.na(res$padj), ]
+  gene_ranks <- res_clean$log2FoldChange
+  names(gene_ranks) <- rownames(res_clean)
+  gene_ranks <- sort(gene_ranks, decreasing = TRUE)
+  
+  print(paste("Prepared", length(gene_ranks), "genes for GSEA"))
+  
+  # Get a small gene set for testing
+  mm_genesets <- msigdbr(species = "Mus musculus", category = "H", subcategory = NULL)
+  
+  if (nrow(mm_genesets) > 0) {
+    pathways <- split(mm_genesets$gene_symbol, mm_genesets$gs_name)
+    
+    # Run quick GSEA
+    gsea_simple <- fgsea(pathways, gene_ranks, nperm = 1000, minSize = 10)
+    
+    if (nrow(gsea_simple) > 0) {
+      print("Top GSEA results:")
+      top_gsea <- head(gsea_simple[order(gsea_simple$pval), ], 5)
+      print(top_gsea[, c("pathway", "pval", "padj", "NES")])
+    }
+  }
+}, error = function(e) {
+  print(paste("GSEA error:", e$message))
+})
+
+
+tryCatch({
+  # Clean and sort results
+  res_clean <- res[!is.na(res$log2FoldChange) & !is.na(res$padj), ]
+  gene_ranks <- res_clean$log2FoldChange
+  names(gene_ranks) <- rownames(res_clean)
+  gene_ranks <- sort(gene_ranks, decreasing = TRUE)
+  
+  print(paste("Prepared", length(gene_ranks), "genes for GSEA"))
+  
+  # Get Hallmark gene sets
+  mm_genesets <- msigdbr(species = "Mus musculus", category = "H")
+  
+  if (nrow(mm_genesets) > 0) {
+    pathways <- split(mm_genesets$gene_symbol, mm_genesets$gs_name)
+    
+    # Run GSEA
+    gsea_results <- fgsea(pathways, gene_ranks, nperm = 1000, minSize = 15)
+    
+    if (nrow(gsea_results) > 0) {
+      # Get top 10 significant pathways
+      top_pathways <- gsea_results[padj < 0.05][order(-abs(NES))][1:10]
+      
+      # Create publication plot
+      gsea_plot <- ggplot(top_pathways, aes(x = reorder(pathway, NES), y = NES)) +
+        geom_col(aes(fill = NES > 0), width = 0.7) +
+        scale_fill_manual(values = c("TRUE" = "red", "FALSE" = "blue")) +
+        coord_flip() +
+        labs(x = "", y = "Normalized Enrichment Score (NES)",
+             title = "GSEA - Hallmark Pathways") +
+        theme_bw() +
+        theme(legend.position = "none",
+              plot.title = element_text(hjust = 0.5, face = "bold"),
+              axis.text.y = element_text(size = 10))
+      
+      print(gsea_plot)
+      ggsave("GSEA_plot.png", gsea_plot, width = 10, height = 6, dpi = 300)
+      shell.exec("GSEA_plot.png")
+    }
+  }
+}, error = function(e) {
+  print(paste("GSEA error:", e$message))
+})
+# Save GSEA plot  
+if (exists("gsea_plot")) {
+  ggsave("GSEA_plot.png", gsea_plot, width = 10, height = 6, dpi = 300)
+  shell.exec("GSEA_plot.png")
+}
+```
+
+#Save results to CSV files
+
+```{r}
+# Save significant genes
+if (exists("sig_genes") && nrow(sig_genes) > 0) {
+  write.csv(sig_genes, "significant_genes_simple.csv")
+  print("Saved significant genes to significant_genes_simple.csv")
+}
+
+# Save all results
+write.csv(res, "all_deseq_results_simple.csv")
+print("Saved all results to all_deseq_results_simple.csv")
+```
+#Final summary
+```{r}
+#print("=== ANALYSIS SUMMARY ===")
+print(paste("Total genes analyzed:", nrow(res)))
+if (exists("sig_genes")) {
+  print(paste("Significant genes (padj<0.05, |FC|>1):", nrow(sig_genes)))
+}
+print("Basic analysis complete!")
+```
+
